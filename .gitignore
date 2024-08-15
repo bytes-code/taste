@@ -115,3 +115,5 @@ checkpoints/
 .idea/
 __MACOSX/
 core
+
+logs

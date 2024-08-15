@@ -51,6 +51,8 @@ from model.transformers import BertTokenizer, WEIGHTS_NAME, AdamW, get_linear_sc
 from model.metric import *
 from type_vocab.vocab_util import *
 
+from util.dataset_util import get_max_col_num
+
 logger = logging.getLogger(__name__)
 
 
@@ -411,6 +413,8 @@ def main():
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     parser.add_argument('--use_histogram_feature', action='store_true', help="Whether to use histogram feature")
+    parser.add_argument("--max_cell_per_col", type=int, default=10)
+        
     args = parser.parse_args()
 
 
@@ -473,13 +477,24 @@ def main():
         torch.distributed.barrier()  # End of barrier to make sure only the first process in distributed training download model & vocab
 
     logger.info("Training/evaluation parameters %s", args)
-
+    
     # Training
     if args.do_train:
+        model_info = {}
+        model_info["split_col_num"] = get_max_col_num([args.train_dataset, args.dev_dataset])
+        model_info["max_cell_per_col"] = args.max_cell_per_col
+        model_info["use_histogram_feature"] = args.use_histogram_feature
+        model_info["type_vocab"] = args.type_vocab
+        
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+        with open(args.output_dir + '/model_info.json', 'w') as f:
+            json.dump(model_info, f)
+
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training process the dataset, and the others will use the cache
-        train_dataset = DataProcessor(args.train_dataset, type_vocab, src="train", max_input_tok=500, max_length = [50, 10, 10])
-        eval_dataset = DataProcessor(args.dev_dataset, type_vocab, src="dev", max_input_tok=500, max_length = [50, 10, 10])
+        train_dataset = DataProcessor(args.train_dataset, type_vocab, src="train", max_input_tok=500, max_length = [50, 10, 10], max_row=args.max_cell_per_col)
+        eval_dataset = DataProcessor(args.dev_dataset, type_vocab, src="dev", max_input_tok=500, max_length = [50, 10, 10], max_row=args.max_cell_per_col)
         assert config.vocab_size == len(train_dataset.tokenizer), \
             "vocab size mismatch, vocab_size=%d"%(len(train_dataset.tokenizer))
 

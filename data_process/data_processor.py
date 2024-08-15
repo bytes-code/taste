@@ -26,7 +26,7 @@ from model.transformers import BertTokenizer
 
 class DataProcessor(Dataset):
     def process_single_table_metadata(self, pgTitle, secTitle, caption, headers):
-
+        
         tokenized_pgTitle = self.tokenizer.encode(pgTitle, max_length=self.max_title_length, add_special_tokens=False)
         tokenized_meta = tokenized_pgTitle + \
                             self.tokenizer.encode(secTitle, max_length=self.max_title_length, add_special_tokens=False)

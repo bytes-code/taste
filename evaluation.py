@@ -15,6 +15,7 @@ from model.configuration import TableConfig
 from model.model import AsymmetricDoubleTower
 import time
 import threading
+from build_mysql_table import COLUMN_NAME_CONFLICT_SEPARATOR
 
 
 class GlobalVars():
@@ -32,6 +33,8 @@ class GlobalVars():
 
     disable_cache = None
     disable_phase2 = None
+    enable_random_select = None
+    split_col_num = None
 
     threshold_alpha = 0.1
     threshold_beta = 0.9
@@ -93,68 +96,78 @@ def phase1_stage1(table_idx):
     # Phase1: get metadata
     table_id, pgTitle, pgEnt, secTitle, caption, headers, histogram = global_vars.mysql_table_loader.get_metadata(table_name,
                                                                                                         global_vars.histogram_map, use_hist_feature)
-    # Phase1: start filter
-    input_tok, input_tok_type, input_tok_pos, input_tok_tok_mask, input_tok_len, column_header_mask, \
-        col_num, tokenized_meta_length, tokenized_headers_length \
-        = global_vars.data_processor.process_single_table_metadata(pgTitle, secTitle, caption, headers)
+    
+    # split the table with large column size into smaller ones
+    for i in range(0, len(headers), global_vars.split_col_num):
+        subtable_idx = str(table_idx) + '-' + str(i)
+        headers_subtable = headers[i:i + global_vars.split_col_num]
+        histogram_subtable = histogram[i:i + global_vars.split_col_num]
+        true_tags_subtable = global_vars.table_2_tags[table_id][i:i + global_vars.split_col_num]
+        
+        # Phase1: start filter
+        headers_clean = [header.split(COLUMN_NAME_CONFLICT_SEPARATOR)[0] for header in headers_subtable] 
+        input_tok, input_tok_type, input_tok_pos, input_tok_tok_mask, input_tok_len, column_header_mask, \
+            col_num, tokenized_meta_length, tokenized_headers_length \
+            = global_vars.data_processor.process_single_table_metadata(pgTitle, secTitle, caption, headers_clean)
 
-    global_vars.col_cnt += col_num
+        global_vars.col_cnt += col_num
 
-    max_input_tok_length = input_tok_len
-    max_input_col_num = col_num
-    batch_size = 1
+        max_input_tok_length = input_tok_len
+        max_input_col_num = col_num
+        batch_size = 1
 
-    input_tok, input_tok_type, input_tok_pos, input_tok_mask, column_header_mask, \
-        histogram = global_vars.data_collator.collate_metadata(batch_size, max_input_tok_length, max_input_col_num, [input_tok],
-                                                    [input_tok_type], \
-                                                    [input_tok_pos], [input_tok_tok_mask], [input_tok_len], \
-                                                    [column_header_mask], [col_num], [histogram] if use_hist_feature else None)
+        input_tok, input_tok_type, input_tok_pos, input_tok_mask, column_header_mask, \
+            histogram_subtable = global_vars.data_collator.collate_metadata(batch_size, max_input_tok_length, max_input_col_num, [input_tok],
+                                                        [input_tok_type], \
+                                                        [input_tok_pos], [input_tok_tok_mask], [input_tok_len], \
+                                                        [column_header_mask], [col_num], [histogram_subtable] if use_hist_feature else None)
 
-    table_data = {}
-    table_data["input_tok"] = input_tok
-    table_data["input_tok_type"] = input_tok_type
-    table_data["input_tok_pos"] = input_tok_pos
-    table_data["input_tok_mask"] = input_tok_mask
-    table_data["column_header_mask"] = column_header_mask
-    table_data["histogram"] = histogram
-    table_data["table_id"] = table_id
-    table_data["col_num"] = col_num
-    table_data["tokenized_meta_length"] = tokenized_meta_length
-    table_data["tokenized_headers_length"] = tokenized_headers_length
-    table_data["input_tok_len"] = input_tok_len
-    table_data["table_name"] = table_name
+        device = global_vars.device
+        input_tok = input_tok.to(device)
+        input_tok_type = input_tok_type.to(device)
+        input_tok_pos = input_tok_pos.to(device)
+        input_tok_mask = input_tok_mask.to(device)
+        column_header_mask = column_header_mask.to(device)
+        if global_vars.use_hist_feature:
+            histogram_subtable = histogram_subtable.to(device)
+        input_tok_mask = input_tok_mask[:, :, :input_tok_mask.shape[1]]
+    
+        table_data = {}
+        table_data["input_tok"] = input_tok
+        table_data["input_tok_type"] = input_tok_type
+        table_data["input_tok_pos"] = input_tok_pos
+        table_data["input_tok_mask"] = input_tok_mask
+        table_data["column_header_mask"] = column_header_mask
+        table_data["histogram_subtable"] = histogram_subtable
+        table_data["headers_subtable"] = headers_subtable
+        table_data["col_num"] = col_num
+        table_data["tokenized_meta_length"] = tokenized_meta_length
+        table_data["tokenized_headers_length"] = tokenized_headers_length
+        table_data["input_tok_len"] = input_tok_len
+        table_data["table_name"] = table_name
+        table_data["true_tags_subtable"] = true_tags_subtable
 
-    data_cache[table_idx] = table_data
+        data_cache[subtable_idx] = table_data
+        scheduler.run_phase1_stage2(subtable_idx)
 
-    scheduler.run_phase1_stage2(table_idx)
 
-
-def phase1_stage2(table_idx):
-    table_data = data_cache[table_idx]
+def phase1_stage2(subtable_idx):
+    table_data = data_cache[subtable_idx]
     input_tok = table_data["input_tok"]
     input_tok_type = table_data["input_tok_type"]
     input_tok_pos = table_data["input_tok_pos"]
     input_tok_mask = table_data["input_tok_mask"]
     column_header_mask = table_data["column_header_mask"]
-    histogram = table_data["histogram"]
+    histogram_subtable = table_data["histogram_subtable"]
     col_num = table_data["col_num"]
-    table_id = table_data["table_id"]
+    true_tags_subtable = table_data["true_tags_subtable"]
 
-    device = global_vars.device
-    input_tok = input_tok.to(device)
-    input_tok_type = input_tok_type.to(device)
-    input_tok_pos = input_tok_pos.to(device)
-    input_tok_mask = input_tok_mask.to(device)
-    column_header_mask = column_header_mask.to(device)
-    if global_vars.use_hist_feature:
-        histogram = histogram.to(device)
-    input_tok_mask = input_tok_mask[:, :, :input_tok_mask.shape[1]]
 
     admitted_col_types = [[] for i in range(col_num)]
-    cache_id = None if global_vars.disable_cache else table_idx
+    cache_id = None if global_vars.disable_cache else subtable_idx
 
     with torch.no_grad():
-        outputs = global_vars.model(input_tok, input_tok_type, input_tok_pos, input_tok_mask, None, None, None, None, None, column_header_mask, None, None, histogram, cache_id)
+        outputs = global_vars.model(input_tok, input_tok_type, input_tok_pos, input_tok_mask, None, None, None, None, None, column_header_mask, None, None, histogram_subtable, cache_id)
 
     prediction_scores = outputs[0]
     prediction_scores = torch.sigmoid(prediction_scores.view(-1, len(global_vars.type_vocab) + 1)) # An extra one for backgroud type (type:null)
@@ -174,15 +187,9 @@ def phase1_stage2(table_idx):
 
         table_data["uncertain_cols"] = uncertain_cols
         table_data["admitted_col_types"] = admitted_col_types
-        table_data["input_tok"] = input_tok
-        table_data["input_tok_type"] = input_tok_type
-        table_data["input_tok_pos"] = input_tok_pos
-        table_data["input_tok_mask"] = input_tok_mask
-        table_data["column_header_mask"] = column_header_mask
-        table_data["histogram"] = histogram
-        data_cache[table_idx] = table_data
-
-        scheduler.run_phase2_stage1(table_idx)
+        data_cache[subtable_idx] = table_data
+        
+        scheduler.run_phase2_stage1(subtable_idx)
     else:
         prediction_labels = prediction_scores > 0.5
         label_indices = torch.nonzero(prediction_labels).tolist()
@@ -197,29 +204,32 @@ def phase1_stage2(table_idx):
                 y_pred[tag_idx] = True
             global_vars.Y_pred.append(y_pred)
 
-            for tag in global_vars.table_2_tags[table_id][col_idx]:
+            for tag in true_tags_subtable[col_idx]:
                 if tag in global_vars.type_vocab:
                     y_true[global_vars.type_vocab[tag]] = True
             global_vars.Y_true.append(y_true)
 
+        table_idx = int(subtable_idx.split('-')[0])
         print(table_idx + 1, '/', len(global_vars.tables), end = "\r")
         if table_idx == len(global_vars.tables) - 1:
             finished_event.set()
 
 
-def phase2_stage1(table_idx):
-    table_data = data_cache[table_idx]
+def phase2_stage1(subtable_idx):
+    table_data = data_cache[subtable_idx]
     uncertain_cols = table_data["uncertain_cols"]
     col_num = table_data["col_num"]
     input_tok_len = table_data["input_tok_len"]
     tokenized_meta_length = table_data["tokenized_meta_length"]
     tokenized_headers_length = table_data["tokenized_headers_length"]
     table_name = table_data["table_name"]
+    headers_subtable = table_data["headers_subtable"]
     
     if len(uncertain_cols) > 0:
         global_vars.col_need_p2_cnt += len(uncertain_cols)
 
-        entities = global_vars.mysql_table_loader2.get_entity_data(table_name, col_num, uncertain_cols)
+        entities = global_vars.mysql_table_loader2.get_entity_data(table_name, col_num, headers_subtable, uncertain_cols, 
+                                                                   global_vars.enable_random_select)
 
         input_ent_text, input_ent_cell_length, input_ent_type, input_ent_mask, \
             column_entity_mask, input_ent_len \
@@ -246,22 +256,22 @@ def phase2_stage1(table_idx):
         table_data["input_ent_type"] = input_ent_type
         table_data["input_ent_mask"] = input_ent_mask
         table_data["column_entity_mask"] = column_entity_mask
-        data_cache[table_idx] = table_data
+        data_cache[subtable_idx] = table_data
 
-    scheduler.run_phase2_stage2(table_idx)
+    scheduler.run_phase2_stage2(subtable_idx)
 
 
-def phase2_stage2(table_idx):
-    table_data = data_cache[table_idx]
+def phase2_stage2(subtable_idx):
+    table_data = data_cache[subtable_idx]
 
     uncertain_cols = table_data["uncertain_cols"]
     col_num = table_data["col_num"]
     admitted_col_types = table_data["admitted_col_types"]
-    table_id = table_data["table_id"]
+    true_tags_subtable = table_data["true_tags_subtable"]
 
     if len(uncertain_cols) > 0:
         input_tok = table_data["input_tok"]
-        histogram = table_data["histogram"]
+        histogram_subtable = table_data["histogram_subtable"]
         column_header_mask = table_data["column_header_mask"]
         input_tok_pos = table_data["input_tok_pos"]
         input_tok_type = table_data["input_tok_type"]
@@ -280,11 +290,11 @@ def phase2_stage2(table_idx):
         input_ent_mask = input_ent_mask.to(device)
         column_entity_mask = column_entity_mask.to(device)
 
-        cache_id = None if global_vars.disable_cache else table_idx
+        cache_id = None if global_vars.disable_cache else subtable_idx
 
         with torch.no_grad():
             outputs = global_vars.model(input_tok, input_tok_type, input_tok_pos, input_tok_mask,\
-                input_ent_text, input_ent_text_length, input_ent_type, input_ent_mask, column_entity_mask, column_header_mask, None, None, histogram, cache_id)
+                input_ent_text, input_ent_text_length, input_ent_type, input_ent_mask, column_entity_mask, column_header_mask, None, None, histogram_subtable, cache_id)
             prediction_scores = outputs[1]
             prediction_scores = torch.sigmoid(prediction_scores.view(-1, len(global_vars.type_vocab) + 1)) # An extra one for backgroud type (type:null)
             prediction_scores = prediction_scores[:col_num, :-1] # exclude backgroud type (type:null)
@@ -302,12 +312,13 @@ def phase2_stage2(table_idx):
         for tag_idx in admitted_col_types[col_idx]:
             y_pred[tag_idx] = True
         global_vars.Y_pred.append(y_pred)
-
-        for tag in global_vars.table_2_tags[table_id][col_idx]:
+        
+        for tag in true_tags_subtable[col_idx]:
             if tag in global_vars.type_vocab:
                 y_true[global_vars.type_vocab[tag]] = True
         global_vars.Y_true.append(y_true)
 
+    table_idx = int(subtable_idx.split('-')[0])
     print(table_idx + 1, '/', len(global_vars.tables), end = "\r")
     if table_idx == len(global_vars.tables) - 1:
         finished_event.set()
@@ -336,14 +347,13 @@ def main():
     parser.add_argument("--mysql_password", default=None, type=str, required=True)
     parser.add_argument("--eval_database", default=None, type=str, required=True)
     parser.add_argument("--model_dir", default=None, type=str, required=True)
-    parser.add_argument('--use_histogram_feature', action='store_true')
     parser.add_argument("--test_dataset", default=None, type=str, required=True)
-    parser.add_argument("--type_vocab", default=None, type=str, required=True)
     parser.add_argument("--threshold_alpha", default=0.1, type=float, required=False)
     parser.add_argument("--threshold_beta", default=0.9, type=float, required=False)
     parser.add_argument('--disable_pipeline', action='store_true')
     parser.add_argument('--disable_cache', action='store_true')
     parser.add_argument('--disable_phase2', action='store_true')
+    parser.add_argument('--enable_random_select', action='store_true')
     args = parser.parse_args()
 
     if args.disable_pipeline:
@@ -352,15 +362,22 @@ def main():
     global_vars.threshold_alpha = args.threshold_alpha
     global_vars.threshold_beta = args.threshold_beta
 
-    # load model
+    # load model info
+    with open(args.model_dir + '/model_info.json') as f:
+        model_info = json.load(f)
+    type_vocab = load_type_vocab(model_info['type_vocab'])
+    use_histogram_feature = model_info['use_histogram_feature']
+    global_vars.split_col_num = model_info['split_col_num']
+    max_cell_per_col = model_info['max_cell_per_col']
+    
+    # load model checkpoint
     device = torch.device('cuda')
     hybrid_model_config = 'model/hybrid_model_config.json'
-    type_vocab = load_type_vocab(args.type_vocab)
     model_path = args.model_dir + '/pytorch_model.bin'
-    model = load_model(AsymmetricDoubleTower, hybrid_model_config, model_path, type_vocab, args.use_histogram_feature, device)
+    model = load_model(AsymmetricDoubleTower, hybrid_model_config, model_path, type_vocab, use_histogram_feature, device)
     print('load model finished.')
 
-    data_processor = DataProcessor(None, type_vocab=None, max_input_tok=500, src="test", max_length=[50, 10, 10])
+    data_processor = DataProcessor(None, type_vocab=None, max_input_tok=500, src="test", max_length=[50, 10, 10], max_row=max_cell_per_col)
     data_collator = DataCollator(data_processor.tokenizer, is_train=False)
 
     mysql_table_loader = MysqlTableLoader(args.mysql_host, args.mysql_port, args.mysql_user, args.mysql_password,args.eval_database)
@@ -383,7 +400,7 @@ def main():
     
     # preload histograms
     histogram_map = None
-    if args.use_histogram_feature:
+    if use_histogram_feature:
         histograms = mysql_table_loader.get_histograms()
         histogram_map = HistogramHelper().reformat_mysql_histograms(histograms)
 
@@ -397,7 +414,7 @@ def main():
     global_vars.data_collator = data_collator
     global_vars.model = model
     global_vars.type_vocab = type_vocab
-    global_vars.use_hist_feature = args.use_histogram_feature
+    global_vars.use_hist_feature = use_histogram_feature
     global_vars.disable_cache = args.disable_cache
     global_vars.mysql_table_loader = mysql_table_loader
     global_vars.mysql_table_loader2 = mysql_table_loader2
@@ -405,7 +422,8 @@ def main():
     global_vars.histogram_map = histogram_map
     global_vars.tables = tables
     global_vars.disable_phase2 = args.disable_phase2
-    
+    global_vars.enable_random_select = args.enable_random_select
+
     for table_idx in range(len(tables)):
         scheduler.run_phase1_stage1(table_idx)
 
@@ -442,4 +460,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

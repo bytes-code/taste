@@ -18,7 +18,7 @@ def random_select_types(all_types, select_n, random_seed=0):
 
 
 if __name__ == "__main__":
-    type_vocab = load_type_vocab('type_vocab/wikitable/type_vocab_255.txt')
+    type_vocab = load_type_vocab('type_vocab/wikitable/type_vocab.txt')
     all_types = list(type_vocab.keys())
 
     n_s = [240,190,180,130,100,50]

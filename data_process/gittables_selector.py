@@ -3,6 +3,7 @@ import random
 from pyarrow import parquet as pq
 import json
 import math
+import argparse
 
 
 def read_all_file_name(folder_path):
@@ -63,14 +64,18 @@ def split_tables(all_tables, split_sizes, random_seed=0):
     return train_tables, dev_tables, test_tables
 
 
-def construct_datasets(train_tables, dev_tables, test_tables, split_col_num, reserve_row_num):
+def construct_datasets(train_tables, dev_tables, test_tables, reserve_rows_for_train):
     train_dataset = []
     dev_dataset = []
     test_dataset = []
 
     type_set = set()
     table_id = 0
-    for tables, dataset in ((train_tables, train_dataset), (dev_tables, dev_dataset), (test_tables, test_dataset),):
+    for tables, dataset, dataset_type in (
+            (train_tables, train_dataset, "train"), 
+            (dev_tables, dev_dataset, "dev"), 
+            (test_tables, test_dataset, "test")
+        ):
         for table_name, table in tables:
             pgTitle = ''
             pgEntity = 0
@@ -82,40 +87,41 @@ def construct_datasets(train_tables, dev_tables, test_tables, split_col_num, res
             table_df = table_df.reset_index(drop=True)
             column_types = json.loads(metadata[b'gittables'].decode('utf-8'))
 
-            num_cols = table_df.shape[1]
-            num_cols_per_small_table = split_col_num
+            headers = [c for c in table_df.columns]
+            annotations = [[] for _ in range(len(headers))]
 
-            small_tables = [table_df.iloc[:, i:i+num_cols_per_small_table] for i in range(0, num_cols, num_cols_per_small_table)]
+            for col_idx, col in enumerate(table_df.columns):
+                if col in column_types['dbpedia_semantic_column_types']:
+                    col_type = column_types['dbpedia_semantic_column_types'][col]['cleaned_label'].lower()
+                    annotations[col_idx].append(col_type)
+                    type_set.add(col_type)
 
-            for small_table in small_tables:
-                headers = [c for c in small_table.columns]
-                annotations = [[] for _ in range(len(headers))]
+            cells = [[] for _ in range(len(headers))]
+            for row_idx, row in table_df.iterrows():
+                if dataset_type != 'test' and row_idx >= reserve_rows_for_train:
+                    # for train/dev dataset, only reserve a fixed number of rows to save memory usage during training
+                    # but for test dataset,  reserve all rows to simulate real prediction scenarios.
+                    break
+                for col_idx, header in enumerate(headers):
+                    cell_value = str(row[header])
+                    if cell_value == 'None' or cell_value == 'nan':
+                        cell_value = ''
+                    cells[col_idx].append([[row_idx, col_idx], [0, cell_value]])
 
-                for col_idx, col in enumerate(small_table.columns):
-                    if col in column_types['dbpedia_semantic_column_types']:
-                        col_type = column_types['dbpedia_semantic_column_types'][col]['cleaned_label'].lower()
-                        annotations[col_idx].append(col_type)
-                        type_set.add(col_type)
-
-                cells = [[] for _ in range(len(headers))]
-                for row_idx, row in small_table.iterrows():
-                    if row_idx >= reserve_row_num:
-                        break
-                    for col_idx, header in enumerate(headers):
-                        cell_value = str(row[header])
-                        if cell_value == 'None' or cell_value == 'nan':
-                            cell_value = ''
-                        cells[col_idx].append([[row_idx, col_idx], [0, cell_value]])
-
-                table_data = [table_id,pgTitle,pgEntity,secTitle,caption,headers,cells,annotations]
-                dataset.append(table_data)
-                table_id += 1
-                print(table_id, end='\r')
+            table_data = [table_id,pgTitle,pgEntity,secTitle,caption,headers,cells,annotations]
+            dataset.append(table_data)
+            table_id += 1
+            print(table_id, end='\r')
 
     return train_dataset, dev_dataset, test_dataset, type_set
 
 
 if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reserve_rows_for_train", default=50, type=int, required=False)
+    args = parser.parse_args()
+    
     folder_path = 'data/gittables/unzipped'
 
     all_file_paths = read_all_file_name(folder_path)
@@ -130,18 +136,18 @@ if __name__ == "__main__":
     train_tables, dev_tables, test_tables = split_tables(tables, [0.8,0.1,0.1])
     print('split finished, sizes:', len(train_tables), len(dev_tables), len(test_tables))
 
-    train_dataset, dev_dataset, test_dataset, type_set = construct_datasets(train_tables, dev_tables, test_tables, 12, 50)
+    train_dataset, dev_dataset, test_dataset, type_set = construct_datasets(train_tables, dev_tables, test_tables, args.reserve_rows_for_train)
     print('construct datasets finished, sizes:', len(train_dataset), len(dev_dataset), len(test_dataset))
     
     print('saving into files..')
-    with open(f'data/gittables/test.gitables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
-        json.dump(test_dataset, file, ensure_ascii=False, indent=4)
+    with open(f'data/gittables/test.gittables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
+        json.dump(test_dataset, file, ensure_ascii=False)
 
-    with open(f'data/gittables/dev.gitables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
-        json.dump(dev_dataset, file, ensure_ascii=False, indent=4)
+    with open(f'data/gittables/dev.gittables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
+        json.dump(dev_dataset, file, ensure_ascii=False)
 
-    with open(f'data/gittables/train.gitables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
-        json.dump(train_dataset, file, ensure_ascii=False, indent=4)
+    with open(f'data/gittables/train.gittables_{int(random_select_cnt/1000)}k.json', 'w', encoding='utf-8') as file:
+        json.dump(train_dataset, file, ensure_ascii=False)
     print('finished.')
     
     all_type = list(type_set)

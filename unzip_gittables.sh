@@ -43,7 +43,6 @@ unzip -q data/gittables/src_zip/last_gasp_tables_licensed.zip -d data/gittables/
 unzip -q data/gittables/src_zip/latent_period_tables_licensed.zip -d data/gittables/unzipped/latent_period_tables_licensed
 unzip -q data/gittables/src_zip/lead_time_tables_licensed.zip -d data/gittables/unzipped/lead_time_tables_licensed
 unzip -q data/gittables/src_zip/living_thing_tables_licensed.zip -d data/gittables/unzipped/living_thing_tables_licensed
-unzip -q data/gittables/src_zip/lunitidal_interval_tables_licensed.zip -d data/gittables/unzipped/lunitidal_interval_tables_licensed
 unzip -q data/gittables/src_zip/meno_mosso_tables_licensed.zip -d data/gittables/unzipped/meno_mosso_tables_licensed
 unzip -q data/gittables/src_zip/menstrual_cycle_tables_licensed.zip -d data/gittables/unzipped/menstrual_cycle_tables_licensed
 unzip -q data/gittables/src_zip/metabolic_rate_tables_licensed.zip -d data/gittables/unzipped/metabolic_rate_tables_licensed
@@ -92,7 +91,6 @@ unzip -q data/gittables/src_zip/thing_tables_licensed.zip -d data/gittables/unzi
 unzip -q data/gittables/src_zip/time_interval_tables_licensed.zip -d data/gittables/unzipped/time_interval_tables_licensed
 unzip -q data/gittables/src_zip/time_out_tables_licensed.zip -d data/gittables/unzipped/time_out_tables_licensed
 unzip -q data/gittables/src_zip/time_slot_tables_licensed.zip -d data/gittables/unzipped/time_slot_tables_licensed
-unzip -q data/gittables/src_zip/track-to -d data/gittables/unzipped/track-track_seek_time_tables_licensed.zip
 unzip -q data/gittables/src_zip/usance_tables_licensed.zip -d data/gittables/unzipped/usance_tables_licensed
 unzip -q data/gittables/src_zip/wartime_tables_licensed.zip -d data/gittables/unzipped/wartime_tables_licensed
 unzip -q data/gittables/src_zip/whole_tables_licensed.zip -d data/gittables/unzipped/whole_tables_licensed
